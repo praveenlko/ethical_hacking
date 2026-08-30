@@ -2,3 +2,5 @@ fastapi
 uvicorn
 gunicorn
 phonenumbers
+requests
+beautifulsoup4

@@ -1,33 +1,35 @@
 from fastapi import FastAPI, HTTPException
 import phonenumbers
-from phonenumbers import geocoder, carrier, timezone, PhoneNumberFormat, PhoneNumberType
+from phonenumbers import geocoder, carrier, timezone, PhoneNumberFormat
+import requests
+from bs4 import BeautifulSoup
 import urllib.parse
 
-app = FastAPI(title="Mobile Info & Footprint API")
+app = FastAPI(title="Auto Footprint Checker API")
 
-def get_number_type_name(num_type):
-    type_dict = {
-        PhoneNumberType.FIXED_LINE: "Fixed Line",
-        PhoneNumberType.MOBILE: "Mobile",
-        PhoneNumberType.VOIP: "VoIP",
-        PhoneNumberType.UNKNOWN: "Unknown"
+def check_google_dork_results(query_url: str) -> dict:
+    """
+    Google Dork Link ko backend se scrape karke checks karta hai ki results exist karte hain ya nahi.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
-    return type_dict.get(num_type, "Mobile/Other")
-
-def generate_osint_dorks(formatted_number: str, national_number: str):
-    encoded_num = urllib.parse.quote(formatted_number)
-    return {
-        "google_search": f"https://www.google.com/search?q=\"{encoded_num}\"",
-        "google_dorks": {
-            "social_media": f"https://www.google.com/search?q=site:facebook.com OR site:twitter.com OR site:instagram.com \"{national_number}\"",
-            "paste_sites": f"https://www.google.com/search?q=site:pastebin.com OR site:justpaste.it \"{national_number}\"",
-            "documents": f"https://www.google.com/search?q=filetype:pdf OR filetype:xlsx \"{national_number}\""
-        },
-        "public_aggregators": [
-            f"https://intelx.io/?s={encoded_num}",
-            f"https://epieos.com"
-        ]
-    }
+    try:
+        response = requests.get(query_url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Google "No results found" warning check karta hai
+        no_results = "did not match any documents" in response.text or "No results found" in response.text
+        
+        return {
+            "found_public_indexed_data": not no_results,
+            "dork_url": query_url
+        }
+    except Exception:
+        return {
+            "found_public_indexed_data": "Unable to verify automatically",
+            "dork_url": query_url
+        }
 
 @app.get("/api/mobile-info")
 def get_mobile_info(number: str):
@@ -37,31 +39,30 @@ def get_mobile_info(number: str):
         if not phonenumbers.is_valid_number(parsed_number):
             return {"success": False, "message": "Invalid phone number"}
 
-        # Basic Info
-        country_name = geocoder.description_for_number(parsed_number, "en")
-        carrier_name = carrier.name_for_number(parsed_number, "en")
-        time_zones = timezone.time_zones_for_number(parsed_number)
-        
-        # Formats
         e164_fmt = phonenumbers.format_number(parsed_number, PhoneNumberFormat.E164)
-        intl_fmt = phonenumbers.format_number(parsed_number, PhoneNumberFormat.INTERNATIONAL)
         national_num = str(parsed_number.national_number)
 
-        # OSINT Footprints
-        footprints = generate_osint_dorks(e164_fmt, national_num)
+        # Dork Search URLs
+        social_dork = f"https://www.google.com/search?q=site:facebook.com OR site:twitter.com OR site:instagram.com \"{national_num}\""
+        paste_dork = f"https://www.google.com/search?q=site:pastebin.com OR site:justpaste.it \"{national_num}\""
+
+        # Backend Verification Runs
+        social_check = check_google_dork_results(social_dork)
+        paste_check = check_google_dork_results(paste_dork)
 
         return {
             "success": True,
-            "input_number": number,
-            "details": {
-                "formatted": intl_fmt,
-                "e164": e164_fmt,
-                "country_code": f"+{parsed_number.country_code}",
-                "region": country_name if country_name else "Unknown",
-                "carrier": carrier_name if carrier_name else "Unknown",
-                "timezones": list(time_zones)
-            },
-            "digital_footprints": footprints
+            "target_number": e164_fmt,
+            "footprints_detection": {
+                "social_media": {
+                    "is_detected_on_public_web": social_check["found_public_indexed_data"],
+                    "search_url": social_check["dork_url"]
+                },
+                "paste_sites": {
+                    "is_detected_on_public_web": paste_check["found_public_indexed_data"],
+                    "search_url": paste_check["dork_url"]
+                }
+            }
         }
 
     except Exception as e:

@@ -15,11 +15,11 @@ def home():
 @app.get("/api/mobile-info")
 def get_mobile_info(number: str):
     """
-    Query Param: number (Country Code ke sath, e.g., +919876543210)
+    Query Param: number (e.g., +919876543210 ya direct 9876543210)
     """
     try:
-        # Number parse karein
-        parsed_number = phonenumbers.parse(number)
+        # Agar number me '+' nahi hai, toh default 'IN' (India) region set karein
+        parsed_number = phonenumbers.parse(number, "IN")
 
         # Validity Check
         is_valid = phonenumbers.is_valid_number(parsed_number)
@@ -33,13 +33,9 @@ def get_mobile_info(number: str):
                 "message": "Invalid phone number provided"
             }
 
-        # Country / Region Name (English)
+        # Details Extract Karein
         country_name = geocoder.description_for_number(parsed_number, "en")
-
-        # Network Carrier (Service Provider)
         carrier_name = carrier.name_for_number(parsed_number, "en")
-
-        # Timezones
         time_zones = timezone.time_zones_for_number(parsed_number)
 
         return {

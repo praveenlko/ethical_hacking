@@ -1,56 +1,68 @@
 from fastapi import FastAPI, HTTPException
 import phonenumbers
-from phonenumbers import geocoder, carrier, timezone
+from phonenumbers import geocoder, carrier, timezone, PhoneNumberFormat, PhoneNumberType
+import urllib.parse
 
-app = FastAPI(
-    title="Mobile Number Info API",
-    description="API to extract region, carrier, and validity details of a phone number",
-    version="1.0.0"
-)
+app = FastAPI(title="Mobile Info & Footprint API")
 
-@app.get("/")
-def home():
-    return {"status": "API is active", "usage": "/api/mobile-info?number=+91XXXXXXXXXX"}
+def get_number_type_name(num_type):
+    type_dict = {
+        PhoneNumberType.FIXED_LINE: "Fixed Line",
+        PhoneNumberType.MOBILE: "Mobile",
+        PhoneNumberType.VOIP: "VoIP",
+        PhoneNumberType.UNKNOWN: "Unknown"
+    }
+    return type_dict.get(num_type, "Mobile/Other")
+
+def generate_osint_dorks(formatted_number: str, national_number: str):
+    encoded_num = urllib.parse.quote(formatted_number)
+    return {
+        "google_search": f"https://www.google.com/search?q=\"{encoded_num}\"",
+        "google_dorks": {
+            "social_media": f"https://www.google.com/search?q=site:facebook.com OR site:twitter.com OR site:instagram.com \"{national_number}\"",
+            "paste_sites": f"https://www.google.com/search?q=site:pastebin.com OR site:justpaste.it \"{national_number}\"",
+            "documents": f"https://www.google.com/search?q=filetype:pdf OR filetype:xlsx \"{national_number}\""
+        },
+        "public_aggregators": [
+            f"https://intelx.io/?s={encoded_num}",
+            f"https://epieos.com"
+        ]
+    }
 
 @app.get("/api/mobile-info")
 def get_mobile_info(number: str):
-    """
-    Query Param: number (e.g., +919876543210 ya direct 9876543210)
-    """
     try:
-        # Agar number me '+' nahi hai, toh default 'IN' (India) region set karein
         parsed_number = phonenumbers.parse(number, "IN")
 
-        # Validity Check
-        is_valid = phonenumbers.is_valid_number(parsed_number)
-        is_possible = phonenumbers.is_possible_number(parsed_number)
+        if not phonenumbers.is_valid_number(parsed_number):
+            return {"success": False, "message": "Invalid phone number"}
 
-        if not is_valid:
-            return {
-                "success": False,
-                "input_number": number,
-                "is_valid": False,
-                "message": "Invalid phone number provided"
-            }
-
-        # Details Extract Karein
+        # Basic Info
         country_name = geocoder.description_for_number(parsed_number, "en")
         carrier_name = carrier.name_for_number(parsed_number, "en")
         time_zones = timezone.time_zones_for_number(parsed_number)
+        
+        # Formats
+        e164_fmt = phonenumbers.format_number(parsed_number, PhoneNumberFormat.E164)
+        intl_fmt = phonenumbers.format_number(parsed_number, PhoneNumberFormat.INTERNATIONAL)
+        national_num = str(parsed_number.national_number)
+
+        # OSINT Footprints
+        footprints = generate_osint_dorks(e164_fmt, national_num)
 
         return {
             "success": True,
             "input_number": number,
-            "is_valid": is_valid,
-            "is_possible": is_possible,
-            "country_code": f"+{parsed_number.country_code}",
-            "national_number": str(parsed_number.national_number),
-            "region": country_name if country_name else "Unknown",
-            "carrier": carrier_name if carrier_name else "Unknown",
-            "timezones": list(time_zones)
+            "details": {
+                "formatted": intl_fmt,
+                "e164": e164_fmt,
+                "country_code": f"+{parsed_number.country_code}",
+                "region": country_name if country_name else "Unknown",
+                "carrier": carrier_name if carrier_name else "Unknown",
+                "timezones": list(time_zones)
+            },
+            "digital_footprints": footprints
         }
 
-    except phonenumbers.NumberParseException as e:
-        raise HTTPException(status_code=400, detail=f"Invalid number format: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
